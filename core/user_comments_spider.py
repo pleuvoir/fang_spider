@@ -7,6 +7,8 @@ import threading
 from concurrent.futures import Future
 from concurrent.futures import ThreadPoolExecutor
 
+import wordcloud
+from jieba import analyse
 from lxml import etree
 
 from util.fang_util import get
@@ -21,12 +23,23 @@ class UserCommentSpider(object):
     # 传入几就是第几页
     INDEX_PAGE_URL = 'https://xian.newhouse.fang.com/house/s/b9{}/?ctm=1.xian.xf_search.page.1'
 
+    def __init__(self):
+        wc = wordcloud.WordCloud(
+            background_color='white',  # 设置背景颜色
+            font_path='/System/Library/Fonts/Hiragino Sans GB.ttc',  # 设置字体格式
+            # mask=mask, # 设置背景图
+            max_words=100,  # 最多显示词数
+            max_font_size=30,  # 字体最大值
+            scale=16  # 调整图片清晰度，值越大越清楚
+        )
+        self.word_cloud = wc
+
     def name(self):
         return '西安新房用户评论爬虫'
 
     def fetch_index_page_size(self):
         """
-        获取高新区新房共有几页，目前一页显示20条
+        获取西安新房共有几页，目前一页显示20条
         """
         # 获取首页返回的html文本
         index_html_text = get_with_decode(url=self.INDEX_PAGE_URL.format(1), decode='gbk')
@@ -77,6 +90,7 @@ class UserCommentSpider(object):
             2.根据链接获取到房屋ID
             3.根据房屋ID构造出评论页面并进行数据获取
             4.保存评论信息
+            5.按照房屋评论生成词云
         :param page: 当前是第几页
         """
         houses_info = self.get_house_info_by_page(page)
@@ -89,8 +103,7 @@ class UserCommentSpider(object):
                 # 增强回调函数
                 future.add_done_callback(functools.partial(self.house_id_handler_callback, house_info=house_info))
 
-    @staticmethod
-    def house_id_handler_callback(future: Future, **kwargs):
+    def house_id_handler_callback(self, future: Future, **kwargs):
         house_info = kwargs['house_info']
         title = house_info[0].replace('/', '_')
         detail_url = house_info[1]
@@ -114,18 +127,25 @@ class UserCommentSpider(object):
                               'starnum': 0, 'shtag': -1, 'rand': 0.8865550224456968})
         comment_list = response.json().get('list')
         write_usage_list = []
+        all_comments = []
         for comment in comment_list:
             # 组装写入文件每行的内容
             formated_comment = comment.get('content').strip().replace('<br/>', '')
             write_usage = '[{0}]|[{1}]|[{2}]|{3}\n'.format(comment.get('user_id'), comment.get('username'),
                                                            comment.get('create_time'),
                                                            formated_comment)
+            all_comments.append(formated_comment)
             write_usage_list.append(write_usage)
         folder = os.path.join(os.getcwd(), 'fang_comments')
         if not os.path.exists(folder):
             os.mkdir(folder)
         with open(f'{folder}/{title}_[评论{count}条].txt', 'w') as f:
             f.writelines(write_usage_list)
+        # 开始生成词云
+        if all_comments:
+            tags = analyse.extract_tags(' '.join(all_comments), topK=10)
+            self.word_cloud.generate(' '.join(tags))
+            self.word_cloud.to_file(f'{folder}/{title}.jpg')
 
 
 def start():
